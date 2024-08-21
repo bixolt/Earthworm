@@ -1,1 +1,488 @@
 
+// AdvancedCarController.cs
+using UnityEngine;
+using UnityEngine.UI;
+using System.Collections;
+
+public class AdvancedCarController : MonoBehaviour
+{
+    public float baseSpeed = 10f;
+    public float boostMultiplier = 2f;
+    public GameObject scorePanel;
+    public Text playerRankText;
+    public AudioClip boostSound;
+    public AudioClip crashSound;
+    public AudioClip powerUpSound;
+    public ParticleSystem boostEffect;
+    public ParticleSystem crashEffect;
+    public ParticleSystem repairEffect;
+    public GameObject[] carSkins;
+    public GameObject[] carUpgrades;
+    public Color[] carColors;
+    public AnimationCurve speedCurve;
+    public AnimationCurve crashEffectIntensity;
+    public float crashEffectDuration = 1f;
+    public float speedChangeRate = 0.5f;
+    public AudioClip engineSound;
+    public ParticleSystem engineEffect;
+    public GameObject[] carVariants;
+    public AnimationCurve boostEffectCurve;
+    public AnimationCurve damageEffectCurve;
+    public GameObject gameOverScreenPrefab;
+    public Text gameOverText;
+
+    private AudioSource audioSource;
+    private float horizontalInput;
+    private float currentSpeed;
+    private int score;
+    private int hearts;
+    private int selectedSkinIndex;
+    private int selectedColorIndex;
+    private bool isBoosting = false;
+    private float boostEndTime = 0f;
+    private bool isAlive = true;
+    private Animator carAnimator;
+    private bool isHighSpeed = false;
+
+    public delegate void CarEventHandler();
+    public event CarEventHandler OnBoostStart;
+    public event CarEventHandler OnBoostEnd;
+    public event CarEventHandler OnCrash;
+    public event CarEventHandler OnPowerUp;
+
+    private void Start()
+    {
+        audioSource = GetComponent<AudioSource>();
+        carAnimator = GetComponent<Animator>();
+        currentSpeed = baseSpeed;
+        score = 0;
+        hearts = 3;
+        selectedSkinIndex = Random.Range(0, carSkins.Length);
+        selectedColorIndex = Random.Range(0, carColors.Length);
+        ApplyCarSkin();
+        ApplyCarUpgrades();
+        UpdateScorePanel();
+        PlayEngineSound();
+    }
+
+    private void Update()
+    {
+        if (!isAlive) return;
+
+        horizontalInput = Input.GetAxis("Horizontal");
+        float move = currentSpeed * Time.deltaTime * speedCurve.Evaluate(Time.time % 1);
+        transform.Translate(new Vector3(horizontalInput, 0, 0) * move);
+
+        if (Input.GetKeyDown(KeyCode.Space))
+        {
+            BoostSpeed();
+        }
+
+        if (isBoosting && Time.time > boostEndTime)
+        {
+            ResetSpeed();
+        }
+
+        AdjustSpeed();
+    }
+
+    private void PlayEngineSound()
+    {
+        if (audioSource && engineSound)
+        {
+            audioSource.loop = true;
+            audioSource.clip = engineSound;
+            audioSource.Play();
+        }
+        if (engineEffect)
+        {
+            engineEffect.Play();
+        }
+    }
+
+    private void BoostSpeed()
+    {
+        if (audioSource && boostSound)
+        {
+            audioSource.PlayOneShot(boostSound);
+        }
+        if (boostEffect)
+        {
+            boostEffect.Play();
+            var main = boostEffect.main;
+            main.startSize = boostEffectCurve.Evaluate(Time.time % 1) * 1.5f;
+        }
+        if (carAnimator)
+        {
+            carAnimator.SetTrigger("Boost");
+        }
+        currentSpeed *= boostMultiplier;
+        isBoosting = true;
+        boostEndTime = Time.time + 5f;
+
+        isHighSpeed = true;
+        OnBoostStart?.Invoke();
+        StartCoroutine(DeactivateHighSpeed());
+    }
+
+    private IEnumerator DeactivateHighSpeed()
+    {
+        yield return new WaitForSeconds(5f);
+        isHighSpeed = false;
+        if (engineEffect) engineEffect.Stop();
+        OnBoostEnd?.Invoke();
+    }
+
+    private void ResetSpeed()
+    {
+        currentSpeed /= boostMultiplier;
+        isBoosting = false;
+        if (boostEffect)
+        {
+            boostEffect.Stop();
+        }
+        if (carAnimator)
+        {
+            carAnimator.SetTrigger("ResetSpeed");
+        }
+    }
+
+    private void AdjustSpeed()
+    {
+        currentSpeed = Mathf.Lerp(currentSpeed, baseSpeed * speedCurve.Evaluate(Time.time % 1), speedChangeRate * Time.deltaTime);
+    }
+
+    private void UpdateScorePanel()
+    {
+        int rank = CalculatePlayerRank();
+        playerRankText.text = "Rank: " + rank;
+        Animator scoreAnimator = scorePanel.GetComponent<Animator>();
+        if (scoreAnimator)
+        {
+            scoreAnimator.SetTrigger("ScoreChanged");
+        }
+    }
+
+    private int CalculatePlayerRank()
+    {
+        return Mathf.FloorToInt(score / 100);
+    }
+
+    private void ApplyCarSkin()
+    {
+        foreach (var skin in carSkins)
+        {
+            skin.SetActive(false);
+        }
+        if (carSkins.Length > 0)
+        {
+            carSkins[selectedSkinIndex].SetActive(true);
+        }
+        Renderer renderer = GetComponent<Renderer>();
+        renderer.material.color = carColors[selectedColorIndex];
+    }
+
+    private void ApplyCarUpgrades()
+    {
+        foreach (var upgrade in carUpgrades)
+        {
+            upgrade.SetActive(Random.value < 0.5f);
+        }
+        int variantIndex = Random.Range(0, carVariants.Length);
+        foreach (var variant in carVariants)
+        {
+            variant.SetActive(false);
+        }
+        if (carVariants.Length > 0)
+        {
+            carVariants[variantIndex].SetActive(true);
+        }
+    }
+
+    private void OnCollisionEnter(Collision collision)
+    {
+        if (!isAlive) return;
+
+        if (collision.gameObject.CompareTag("Obstacle"))
+        {
+            hearts--;
+            OnCrash?.Invoke();
+            if (audioSource && crashSound)
+            {
+                audioSource.PlayOneShot(crashSound);
+            }
+            if (crashEffect)
+            {
+                crashEffect.transform.position = collision.contacts[0].point;
+                var main = crashEffect.main;
+                main.startSize = crashEffectIntensity.Evaluate(Random.value) * damageEffectCurve.Evaluate(Time.time % 1);
+                crashEffect.Play();
+                Invoke("StopCrashEffect", crashEffectDuration);
+            }
+            UpdateScorePanel();
+            if (hearts <= 0)
+            {
+                isAlive = false;
+                ShowGameOverScreen();
+            }
+        }
+        else if (collision.gameObject.CompareTag("PowerUp"))
+        {
+            IncreaseScore(10);
+            OnPowerUp?.Invoke();
+            if (audioSource && powerUpSound)
+            {
+                audioSource.PlayOneShot(powerUpSound);
+            }
+            if (repairEffect)
+            {
+                repairEffect.transform.position = transform.position;
+                repairEffect.Play();
+            }
+            Destroy(collision.gameObject);
+        }
+    }
+
+    private void IncreaseScore(int points)
+    {
+        score += points;
+        UpdateScorePanel();
+    }
+
+    private void ShowGameOverScreen()
+    {
+        GameObject gameOverScreen = Instantiate(gameOverScreenPrefab);
+        Text gameOverTextComponent = gameOverScreen.GetComponentInChildren<Text>();
+        if (gameOverTextComponent)
+        {
+            gameOverTextComponent.text = "Game Over! Your final rank is: " + CalculatePlayerRank();
+        }
+    }
+
+    private void StopCrashEffect()
+    {
+        if (crashEffect)
+        {
+            crashEffect.Stop();
+        }
+    }
+}
+
+// AdvancedCoinDropController.cs
+using UnityEngine;
+
+public class AdvancedCoinDropController : MonoBehaviour
+{
+    public float dropInterval = 2f;
+    public GameObject coinPrefab;
+    public Transform[] dropPoints;
+    public AnimationCurve dropPattern;
+    public AudioClip coinSound;
+    public ParticleSystem[] dropEffects;
+    public AnimationCurve effectIntensityCurve;
+    public float effectIntensityMultiplier = 1.5f;
+    public GameObject specialCoinPrefab;
+    public float specialCoinChance = 0.1f;
+    public float dropHeightVariance = 2f;
+    public float dropSpeed = 5f;
+    public float dropSpeedIncrease = 0.1f;
+
+    private AudioSource audioSource;
+    private float timer;
+
+    private void Start()
+    {
+        audioSource = GetComponent<AudioSource>();
+        timer = 0f;
+    }
+
+    private void Update()
+    {
+        timer += Time.deltaTime;
+        if (timer >= dropInterval)
+        {
+            DropCoin();
+            timer = 0f;
+            dropSpeed += dropSpeedIncrease;
+        }
+    }
+
+    private void DropCoin()
+    {
+        int index = Random.Range(0, dropPoints.Length);
+        float dropHeight = dropPattern.Evaluate(Random.Range(0f, 1f)) * dropHeightVariance;
+        Vector3 dropPosition = new Vector3(dropPoints[index].position.x, dropPoints[index].position.y + dropHeight, 0);
+
+        GameObject coin = Random.Range(0f, 1f) < specialCoinChance ? Instantiate(specialCoinPrefab, dropPosition, Quaternion.identity) : Instantiate(coinPrefab, dropPosition, Quaternion.identity);
+        coin.GetComponent<Rigidbody2D>().velocity = new Vector2(0, -dropSpeed);
+
+        int effectIndex = Random.Range(0, dropEffects.Length);
+        if (dropEffects.Length > 0)
+        {
+            ParticleSystem effect = dropEffects[effectIndex];
+            effect.transform.position = dropPosition;
+            var main = effect.main;
+            main.startSize = effectIntensityCurve.Evaluate(Random.Range(0f, 1f)) * effectIntensityMultiplier;
+            effect.Play();
+        }
+
+        if (audioSource && coinSound)
+        {
+            audioSource.PlayOneShot(coinSound);
+        }
+    }
+}
+
+// AdvancedObstacleController.cs
+using UnityEngine;
+
+public class AdvancedObstacleController : MonoBehaviour
+{
+    public GameObject obstaclePrefab;
+    public Transform[] spawnPoints;
+    public float spawnInterval = 3f;
+    public AnimationCurve spawnPattern;
+    public AudioClip obstacleSpawnSound;
+    public AudioClip obstacleHitSound;
+    public ParticleSystem hitEffect;
+    public float hitEffectIntensityMultiplier = 1.5f;
+
+    private AudioSource audioSource;
+    private float timer;
+
+    private void Start()
+    {
+        audioSource = GetComponent<AudioSource>();
+        timer = 0f;
+    }
+
+    private void Update()
+    {
+        timer += Time.deltaTime;
+        if (timer >= spawnInterval)
+        {
+            SpawnObstacle();
+            timer = 0f;
+        }
+    }
+
+    private void SpawnObstacle()
+    {
+        int index = Random.Range(0, spawnPoints.Length);
+        Vector3 spawnPosition = spawnPoints[index].position;
+
+        if (audioSource && obstacleSpawnSound)
+        {
+            audioSource.PlayOneShot(obstacleSpawnSound);
+        }
+
+        GameObject obstacle = Instantiate(obstaclePrefab, spawnPosition, Quaternion.identity);
+        obstacle.GetComponent<Rigidbody2D>().velocity = new Vector2(0, -10f);
+
+        // Optionally: Customize obstacle based on the spawn pattern
+    }
+
+    private void OnCollisionEnter2D(Collision2D collision)
+    {
+        if (collision.gameObject.CompareTag("Car"))
+        {
+            if (audioSource && obstacleHitSound)
+            {
+                audioSource.PlayOneShot(obstacleHitSound);
+            }
+            if (hitEffect)
+            {
+                hitEffect.transform.position = collision.contacts[0].point;
+                var main = hitEffect.main;
+                main.startSize = hitEffectIntensityMultiplier;
+                hitEffect.Play();
+                Destroy(hitEffect.gameObject, 1f);
+            }
+        }
+    }
+}
+
+// AdvancedPowerUpController.cs
+using UnityEngine;
+
+public class AdvancedPowerUpController : MonoBehaviour
+{
+    public GameObject powerUpPrefab;
+    public Transform[] spawnPoints;
+    public float spawnInterval = 10f;
+    public AudioClip powerUpSound;
+    public ParticleSystem powerUpEffect;
+    public AnimationCurve effectIntensityCurve;
+    public float effectIntensityMultiplier = 1.5f;
+
+    private AudioSource audioSource;
+    private float timer;
+
+    private void Start()
+    {
+        audioSource = GetComponent<AudioSource>();
+        timer = 0f;
+    }
+
+    private void Update()
+    {
+        timer += Time.deltaTime;
+        if (timer >= spawnInterval)
+        {
+            SpawnPowerUp();
+            timer = 0f;
+        }
+    }
+
+    private void SpawnPowerUp()
+    {
+        int index = Random.Range(0, spawnPoints.Length);
+        Vector3 spawnPosition = spawnPoints[index].position;
+
+        GameObject powerUp = Instantiate(powerUpPrefab, spawnPosition, Quaternion.identity);
+        powerUp.GetComponent<Rigidbody2D>().velocity = new Vector2(0, -5f);
+
+        if (audioSource && powerUpSound)
+        {
+            audioSource.PlayOneShot(powerUpSound);
+        }
+
+        if (powerUpEffect)
+        {
+            powerUpEffect.transform.position = spawnPosition;
+            var main = powerUpEffect.main;
+            main.startSize = effectIntensityCurve.Evaluate(Random.Range(0f, 1f)) * effectIntensityMultiplier;
+            powerUpEffect.Play();
+            Destroy(powerUpEffect.gameObject, 1f);
+        }
+    }
+}
+
+// AdvancedGameOverScreen.cs
+using UnityEngine;
+using UnityEngine.UI;
+
+public class AdvancedGameOverScreen : MonoBehaviour
+{
+    public Text gameOverText;
+    public Button retryButton;
+    public Button quitButton;
+
+    private void Start()
+    {
+        retryButton.onClick.AddListener(OnRetryClicked);
+        quitButton.onClick.AddListener(OnQuitClicked);
+    }
+
+    private void OnRetryClicked()
+    {
+        // Logic to restart the game
+        UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name);
+    }
+
+    private void OnQuitClicked()
+    {
+        // Logic to quit the game
+        Application.Quit();
+    }
+}
